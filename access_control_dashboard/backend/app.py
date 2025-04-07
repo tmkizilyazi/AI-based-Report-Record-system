@@ -9,7 +9,8 @@ from database import (
     get_database_schema,
     test_db_connection,
     chat_with_database,
-    execute_generated_sql
+    execute_generated_sql,
+    list_database_tables
 )
 from config import API_HOST, API_PORT, DEBUG, ALLOWED_ORIGINS
 
@@ -49,8 +50,28 @@ def access_logs():
         print(f"Access logs hatası: {str(e)}")
         return jsonify([]), 200
 
-@app.route('/api/door-statistics', methods=['GET'])
-def door_statistics():
+@app.route('/api/stats', methods=['GET'])
+def stats():
+    """Tüm istatistikleri getirir"""
+    try:
+        door_stats = get_door_statistics()
+        user_stats = get_user_statistics()
+        hourly_stats = get_hourly_statistics()
+        return jsonify({
+            'door_stats': door_stats,
+            'user_stats': user_stats,
+            'hourly_stats': hourly_stats
+        })
+    except Exception as e:
+        print(f"Stats hatası: {str(e)}")
+        return jsonify({
+            'door_stats': [],
+            'user_stats': [],
+            'hourly_stats': []
+        }), 200
+
+@app.route('/api/door-stats', methods=['GET'])
+def door_stats():
     """Kapı istatistiklerini getirir"""
     try:
         stats = get_door_statistics()
@@ -59,8 +80,8 @@ def door_statistics():
         print(f"Door statistics hatası: {str(e)}")
         return jsonify([]), 200
 
-@app.route('/api/user-statistics', methods=['GET'])
-def user_statistics():
+@app.route('/api/user-stats', methods=['GET'])
+def user_stats():
     """Kullanıcı istatistiklerini getirir"""
     try:
         stats = get_user_statistics()
@@ -69,14 +90,24 @@ def user_statistics():
         print(f"User statistics hatası: {str(e)}")
         return jsonify([]), 200
 
-@app.route('/api/hourly-statistics', methods=['GET'])
-def hourly_statistics():
+@app.route('/api/hourly-stats', methods=['GET'])
+def hourly_stats():
     """Saatlik istatistikleri getirir"""
     try:
         stats = get_hourly_statistics()
         return jsonify(stats)
     except Exception as e:
         print(f"Hourly statistics hatası: {str(e)}")
+        return jsonify([]), 200
+
+@app.route('/api/recent-logs', methods=['GET'])
+def recent_logs():
+    """Son erişim kayıtlarını getirir"""
+    try:
+        logs = get_access_logs()
+        return jsonify(logs)
+    except Exception as e:
+        print(f"Recent logs hatası: {str(e)}")
         return jsonify([]), 200
 
 @app.route('/api/schema', methods=['GET'])
@@ -112,5 +143,15 @@ def execute_sql():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/tables', methods=['GET'])
+def get_tables():
+    """Veritabanındaki tüm tabloları listeler"""
+    try:
+        tables = list_database_tables()
+        return jsonify({'tables': tables})
+    except Exception as e:
+        print(f"Tablo listesi hatası: {str(e)}")
+        return jsonify({'tables': []}), 200
+
 if __name__ == '__main__':
-    app.run(host=API_HOST, port=API_PORT, debug=DEBUG) 
+    app.run(host='10.34.4.183', port=5000, debug=True) 

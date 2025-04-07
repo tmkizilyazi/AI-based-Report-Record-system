@@ -1,5 +1,9 @@
 import pyodbc
 import requests
+import base64
+import os
+import google.generativeai as genai
+from google.generativeai import types
 from config import (
     DB_SERVER, DB_DATABASE, DB_USERNAME, DB_PASSWORD,
     GEMINI_API_KEY, GEMINI_API_URL, DB_ENCRYPTION_KEY
@@ -51,7 +55,7 @@ def test_db_connection():
         return f"Bağlantı hatası: {str(e)}"
 
 def get_db_connection():
-    """MSSQL veritabanına bağlantı oluşturur"""
+    """Veritabanı bağlantısı oluşturur"""
     try:
         conn_str = (
             f'DRIVER={{SQL Server}};'
@@ -59,15 +63,12 @@ def get_db_connection():
             f'DATABASE={DB_DATABASE};'
             f'UID={DB_USERNAME};'
             f'PWD={DB_PASSWORD};'
-            'MultipleActiveResultSets=true;'
-            'TrustServerCertificate=True;'
+            'TrustServerCertificate=yes;'
         )
         return pyodbc.connect(conn_str)
     except Exception as e:
         print(f"Veritabanı bağlantı hatası: {str(e)}")
-        # Gerçek ortamda hata fırlatmak yerine boş sonuç döndürüyoruz
-        # Bu sayede frontend'de hata olmadan boş grafikler gösterilebilir
-        raise Exception(f"Veritabanı bağlantı hatası: {str(e)}")
+        return None
 
 def execute_query(query, params=None):
     """Veritabanı sorgusu çalıştırır ve sonuçları döndürür"""
@@ -123,27 +124,44 @@ def get_access_logs():
 def get_door_statistics():
     """Kapı istatistiklerini getirir"""
     try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Kapı istatistikleri sorgusu
         query = """
         SELECT 
-            DoorID,
-            DoorName,
-            COUNT(*) as AccessCount,
-            COUNT(CASE WHEN AccessType = 'success' THEN 1 END) as SuccessCount,
-            COUNT(CASE WHEN AccessType = 'failed' THEN 1 END) as FailedCount
-        FROM AccessLogs
-        GROUP BY DoorID, DoorName
-        ORDER BY AccessCount DESC
+            d.name as door_name,
+            COUNT(*) as access_count,
+            SUM(CASE WHEN al.success = 1 THEN 1 ELSE 0 END) as successful_accesses,
+            SUM(CASE WHEN al.success = 0 THEN 1 ELSE 0 END) as failed_accesses,
+            CAST(SUM(CASE WHEN al.success = 1 THEN 1 ELSE 0 END) AS FLOAT) / COUNT(*) * 100 as success_rate
+        FROM access_logs al
+        JOIN doors d ON al.door_id = d.id
+        GROUP BY d.name
+        ORDER BY access_count DESC
         """
-        results = execute_query(query)
-        return [{
-            'door_id': row[0],
-            'door_name': row[1],
-            'access_count': row[2],
-            'success_count': row[3],
-            'failed_count': row[4]
-        } for row in results]
+        
+        cursor.execute(query)
+        results = cursor.fetchall()
+        
+        # Sonuçları JSON formatına dönüştür
+        door_stats = []
+        for row in results:
+            door_stats.append({
+                'door_name': row[0],
+                'access_count': row[1],
+                'successful_accesses': row[2],
+                'failed_accesses': row[3],
+                'success_rate': round(row[4], 2)
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        return door_stats
+        
     except Exception as e:
-        print(f"Kapı istatistikleri alınamadı: {str(e)}")
+        print(f"Kapı istatistikleri hatası: {str(e)}")
         return []
 
 def get_user_statistics():
@@ -509,135 +527,36 @@ def get_database_schema():
         
         return {'tables': tables, 'relationships': relationships}
 
-def chat_with_database(user_message):
-    """Kullanıcının veritabanı hakkındaki sorularını yanıtlar"""
+def chat_with_database(message):
     try:
-        # Kullanıcı mesajında anahtar kelimeleri kontrol et
-        message_lower = user_message.lower()
+        # Gemini API'yi yapılandır
+        genai.configure(api_key=GEMINI_API_KEY)
         
-        # Kapılarla ilgili istatistikler
-        if any(keyword in message_lower for keyword in ["kapı", "kapi", "gate"]):
-            try:
-                # Kapı istatistikleri sorgusu
-                query = """
-                SELECT 
-                    g.GateName, 
-                    COUNT(m.ID) as MovementCount
-                FROM Gates g
-                LEFT JOIN Movements m ON g.ID = m.GateID
-                GROUP BY g.GateName, g.ID
-                ORDER BY MovementCount DESC
-                """
-                
-                results = execute_query(query)
-                
-                if results and len(results) > 0:
-                    response = "Kapı İstatistikleri:\n\n"
-                    for i, row in enumerate(results, 1):
-                        gate_name = row[0]
-                        movement_count = row[1]
-                        response += f"{i}. {gate_name}: {movement_count} hareket\n"
-                    
-                    # Toplam kapı sayısı
-                    response += f"\nToplam {len(results)} kapı bulunmaktadır."
-                    
-                    # En çok kullanılan kapılar
-                    if len(results) > 0:
-                        most_used = results[0]
-                        response += f"\n\nEn çok kullanılan kapı: {most_used[0]} ({most_used[1]} hareket)"
-                    
-                    return response
-                else:
-                    return "Veritabanında kapı istatistikleri bulunamadı."
-                    
-            except Exception as e:
-                print(f"Kapı sorgusu hatası: {str(e)}")
-                
-                # Alternatif sorgulama deneyin
-                try:
-                    # Sadece kapıları listele
-                    query = "SELECT GateName, Description FROM Gates"
-                    results = execute_query(query)
-                    
-                    if results and len(results) > 0:
-                        response = "Sistemdeki Kapılar:\n\n"
-                        for i, row in enumerate(results, 1):
-                            gate_name = row[0]
-                            description = row[1] if row[1] else "Açıklama yok"
-                            response += f"{i}. {gate_name}: {description}\n"
-                        
-                        return response
-                    else:
-                        return "Veritabanında kapı bilgisi bulunamadı."
-                except:
-                    # Tüm tablolar arasında kapı kelimesi içeren tabloları bul
-                    schema_data = get_database_schema()
-                    gate_tables = [table for table in schema_data['tables'].keys() 
-                                if "gate" in table.lower() or "kapi" in table.lower()]
-                    
-                    response = "Veritabanında kapılarla ilgili şu tablolar bulunmaktadır:\n\n"
-                    for table in gate_tables:
-                        response += f"- {table}\n"
-                    
-                    response += "\nDetaylı istatistikler için veritabanı bağlantınızı kontrol edin."
-                    return response
+        # Modeli seç
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
-        # Kullanıcı istatistikleri
-        elif any(keyword in message_lower for keyword in ["kullanıcı", "kullanici", "user", "personel"]):
-            try:
-                # Kullanıcı istatistikleri sorgusu
-                query = """
-                SELECT TOP 10
-                    u.UserName, 
-                    COUNT(m.ID) as MovementCount
-                FROM Users u
-                LEFT JOIN Movements m ON u.ID = m.UserID
-                GROUP BY u.UserName, u.ID
-                ORDER BY MovementCount DESC
-                """
-                
-                results = execute_query(query)
-                
-                if results and len(results) > 0:
-                    response = "En Aktif 10 Kullanıcı:\n\n"
-                    for i, row in enumerate(results, 1):
-                        user_name = row[0]
-                        movement_count = row[1]
-                        response += f"{i}. {user_name}: {movement_count} hareket\n"
-                    
-                    return response
-                else:
-                    return "Veritabanında kullanıcı istatistikleri bulunamadı."
-            except Exception as e:
-                print(f"Kullanıcı sorgusu hatası: {str(e)}")
-                return f"Kullanıcı istatistikleri alınırken bir hata oluştu: {str(e)}"
+        # Prompt'u hazırla
+        prompt = f"""Sen bir veritabanı uzmanısın. Aşağıdaki soruyu analiz et ve SQL sorgusu oluştur.
+        Veritabanı şeması:
+        - doors: id, name, status, last_access
+        - users: id, name, role, department
+        - access_logs: id, user_id, door_id, timestamp, success
+
+        Soru: {message}
+
+        Lütfen şu adımları takip et:
+        1. Soruyu analiz et
+        2. Gerekli SQL sorgusunu oluştur
+        3. Sonuçları açıkla
+        4. Görselleştirme önerisi sun
+        """
         
-        # Genel veritabanı bilgisi
-        else:
-            # Veritabanı şemasını al
-            schema_data = get_database_schema()
-            table_count = len(schema_data['tables'])
-            
-            # İlk 5 tabloyu seç
-            top_tables = list(schema_data['tables'].keys())[:5]
-            
-            # İlişki sayısını al
-            relation_count = len(schema_data.get('relationships', []))
-            
-            response = f"Veritabanı Özeti:\n\n"
-            response += f"- Toplam Tablo Sayısı: {table_count}\n"
-            response += f"- İlişki Sayısı: {relation_count}\n\n"
-            
-            response += "Önemli Tablolar:\n"
-            for table in top_tables:
-                response += f"- {table}\n"
-            
-            response += "\nBelirli bir tablo hakkında detaylı bilgi için 'table_name hakkında bilgi ver' şeklinde sorun."
-            return response
-            
+        # Yanıtı al
+        response = model.generate_content(prompt)
+        return response.text
+        
     except Exception as e:
-        print(f"Chat sorgusu hatası: {str(e)}")
-        return f"Üzgünüm, veritabanı sorgunuz işlenirken bir hata oluştu: {str(e)}"
+        return f"Gemini API hatası: {str(e)}"
 
 def generate_sql_for_question(question):
     """Kullanıcının sorusuna göre SQL sorgusu önerir"""
@@ -756,4 +675,29 @@ def execute_generated_sql(question):
         return {
             "error": f"SQL sorgusu çalıştırılırken bir hata oluştu: {str(e)}",
             "query": query if locals().get('query') else None
-        } 
+        }
+
+def list_database_tables():
+    """Veritabanındaki tüm tabloları listeler"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Tüm tabloları listele
+        cursor.execute("""
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_TYPE = 'BASE TABLE'
+            ORDER BY TABLE_NAME
+        """)
+        
+        tables = cursor.fetchall()
+        table_names = [table[0] for table in tables]
+        
+        cursor.close()
+        conn.close()
+        
+        return table_names
+    except Exception as e:
+        print(f"Tablo listesi alınamadı: {str(e)}")
+        return [] 

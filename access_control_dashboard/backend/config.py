@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # API Ayarları
-API_HOST = '0.0.0.0'
+API_HOST = '10.34.4.183'
 API_PORT = 5000
 DEBUG = True
 
@@ -17,8 +17,8 @@ DB_PASSWORD = 'tpsy@z09!'
 DB_ENCRYPTION_KEY = 'Z546B8DF278CD5931069B522E695D4E8'
 
 # CORS ayarları
-ALLOWED_ORIGINS = ['http://localhost:8050', 'http://127.0.0.1:8050']
+ALLOWED_ORIGINS = ['*']
 
 # Chatbot Ayarları
-GEMINI_API_KEY = os.getenv('AIzaSyBkOST2i0RCsfr0xzYuJV1sIBxA-sqUsyA', '')
+GEMINI_API_KEY = 'AIzaSyBkOST2i0RCsfr0xzYuJV1sIBxA-sqUsyA'  # Gemini API anahtarınızı buraya ekleyin
 GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1' 
